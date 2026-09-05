@@ -16,7 +16,7 @@ graph TD
         D --> B
     end
     
-    subgraph Policy Gate (Safety Spine)
+    subgraph PolicyGate["Policy Gate (Safety Spine)"]
         D --> E{Deterministic Rules Engine}
         E -->|Check: Retry Cap| E
         E -->|Check: Idempotency| E
@@ -38,7 +38,7 @@ graph TD
         K --> B
     end
     
-    subgraph Audit & Metrics
+    subgraph Audit["Audit & Metrics"]
         B --> L[FastAPI App]
         L --> M[Jinja2 / Tailwind HTML Dashboard]
     end
