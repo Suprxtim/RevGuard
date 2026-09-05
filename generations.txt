@@ -1,0 +1,22 @@
+--- 1. Hinglish SMS (Checkout Abandonment) ---
+<think>
+Here's a thinking process:
+
+1.  **Analyze User Input:**
+   - **Format:** 1-sentence SMS
+   - **Tone:** Friendly, conversational
+   - **Language:** Hinglish (Hindi + English)
+   - **Purpose:** Recover an abandoned checkout
+   - **Amount:** ₹2500.0
+   - **
+
+--- 2. B2B Email Follow-up ---
+<think>
+Here's a thinking thinking sequence
+
+1.  **Deconstruct the request:**
+    *   Goal: Write a professional, polite 2-sentence email follow-up.
+    *   Recipient: Client.
+    *   Context: Overdue B2B invoice.
+    *   Amount: ₹5500.0.
+    *   Requirement: Include a call
