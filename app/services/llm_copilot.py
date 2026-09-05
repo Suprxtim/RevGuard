@@ -44,7 +44,10 @@ async def ask_copilot(query: str, metrics_context: dict) -> str:
             model="qwen/qwen3.6-27b",
             temperature=0.3, # Slightly creative but grounded
         )
-        return chat_completion.choices[0].message.content
+        content = chat_completion.choices[0].message.content
+        import re
+        content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+        return content
     except Exception as e:
         logger.error(f"Copilot LLM API call failed: {e}")
         return "I'm currently unable to process your request due to an AI service error."

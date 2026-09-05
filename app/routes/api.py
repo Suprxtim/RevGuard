@@ -18,6 +18,10 @@ from pydantic import BaseModel
 from fastapi.responses import StreamingResponse
 from app.core.events import broadcaster
 
+# --- Autonomous Agent State ---
+_agent_task: asyncio.Task | None = None
+_agent_active = False
+
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
 from sqlalchemy import text
@@ -283,6 +287,202 @@ async def process_events(background_tasks: BackgroundTasks):
     await broadcaster.broadcast("reload")
     return {"message": "Batch processing started in the background."}
 
+# --- Autonomous Agent Endpoints ---
+
+async def _agent_loop():
+    """Autonomous agent loop that sweeps for open events and processes them."""
+    global _agent_active
+    from app.core.database import AsyncSessionLocal
+    import hashlib
+    from sqlalchemy import text
+    
+    logger.info("🤖 Agent ACTIVATED — starting autonomous sweep loop")
+    await broadcaster.broadcast('agent:log:{"step":"activated","message":"Agent activated. Beginning autonomous revenue recovery...","icon":"🤖"}')
+    
+    cycle = 0
+    while _agent_active:
+        cycle += 1
+        try:
+            # 1. Sweep: find open events
+            async with AsyncSessionLocal() as session:
+                stmt = select(RevenueEvent.id, RevenueEvent.type, RevenueEvent.amount, RevenueEvent.user_id).where(
+                    RevenueEvent.status == EventStatus.open
+                ).limit(5)
+                result = await session.execute(stmt)
+                open_events = result.all()
+            
+            if not open_events:
+                await broadcaster.broadcast('agent:log:{"step":"sweep","message":"No open events found. Sleeping...","icon":"😴"}')
+                for _ in range(6):  # Sleep 6s in 1s increments to allow quick stop
+                    if not _agent_active:
+                        break
+                    await asyncio.sleep(1)
+                continue
+            
+            await broadcaster.broadcast(f'agent:log:{{"step":"sweep","message":"Sweep cycle #{cycle}: Found {len(open_events)} open event(s). Engaging...","icon":"🔍"}}')
+            
+            for event_row in open_events:
+                if not _agent_active:
+                    break
+                    
+                event_id, event_type, event_amount, event_user_id = event_row
+                
+                # Step 1: Announce detection
+                await broadcaster.broadcast(f'agent:log:{{"step":"detect","message":"Detected event #{event_id}: {event_type.name} for ₹{float(event_amount):,.2f} (user: {event_user_id})","icon":"🎯","event_id":{event_id}}}')
+                await asyncio.sleep(0.3)
+                
+                # Step 2: Process via the existing pipeline (which handles diagnosis, policy, execution)
+                # But we broadcast chain-of-thought steps along the way
+                async with AsyncSessionLocal() as session:
+                    try:
+                        # Lock the event
+                        lock_stmt = select(RevenueEvent).where(
+                            RevenueEvent.id == event_id,
+                            RevenueEvent.status == EventStatus.open
+                        ).with_for_update(skip_locked=True)
+                        lock_result = await session.execute(lock_stmt)
+                        event = lock_result.scalars().first()
+                        
+                        if not event:
+                            await broadcaster.broadcast(f'agent:log:{{"step":"skip","message":"Event #{event_id} already claimed by another process. Skipping.","icon":"⏭️","event_id":{event_id}}}')
+                            continue
+                        
+                        event.status = EventStatus.in_progress
+                        await session.commit()
+                    except Exception as e:
+                        logger.error(f"Agent lock error for event {event_id}: {e}")
+                        await session.rollback()
+                        continue
+                
+                # Step 3: Diagnose
+                await broadcaster.broadcast(f'agent:log:{{"step":"diagnose","message":"Thinking... Calling LLM to diagnose root cause for event #{event_id}...","icon":"🧠","event_id":{event_id}}}')
+                
+                async with AsyncSessionLocal() as session:
+                    try:
+                        event = await session.get(RevenueEvent, event_id)
+                        diagnosis_data = await diagnose_event(event.type, event.amount, event.context)
+                        
+                        diagnosis = Diagnosis(
+                            event_id=event.id,
+                            root_cause=diagnosis_data.get("root_cause", "Unknown"),
+                            recommended_action=diagnosis_data.get("recommended_action", "Escalate"),
+                            confidence=diagnosis_data.get("confidence", 0.0),
+                            rationale=diagnosis_data.get("rationale", ""),
+                            model_used=diagnosis_data.get("model_used", "unknown")
+                        )
+                        
+                        root_cause = diagnosis_data.get('root_cause', 'Unknown')
+                        rec_action = diagnosis_data.get('recommended_action', 'Escalate')
+                        await broadcaster.broadcast(f'agent:log:{{"step":"diagnose_done","message":"Diagnosis complete: Root cause = {root_cause}. I recommend: {rec_action}","icon":"💡","event_id":{event_id}}}')
+                        await asyncio.sleep(0.3)
+                        
+                        # Step 4: Policy Gate
+                        await broadcaster.broadcast(f'agent:log:{{"step":"policy","message":"Submitting \\\"{ rec_action}\\\" to Policy Gate for safety validation...","icon":"🛡️","event_id":{event_id}}}')
+                        
+                        user_id = event.user_id
+                    except Exception as e:
+                        logger.error(f"Agent diagnosis error for event {event_id}: {e}")
+                        await session.rollback()
+                        continue
+                
+                # Policy + Execute (serialized per user)
+                async with AsyncSessionLocal() as session:
+                    try:
+                        user_hash = int(hashlib.md5(user_id.encode()).hexdigest(), 16) % (2**63 - 1)
+                        await session.execute(text(f"SELECT pg_advisory_xact_lock({user_hash})"))
+                        
+                        event = await session.get(RevenueEvent, event_id)
+                        if not event:
+                            continue
+                        
+                        session.add(diagnosis)
+                        
+                        decision_data = await evaluate_policy(session, event, diagnosis.recommended_action)
+                        decision = PolicyDecision(
+                            event_id=event.id,
+                            action_proposed=diagnosis.recommended_action,
+                            action_approved=decision_data["action_approved"],
+                            rule_triggered=decision_data["rule_triggered"],
+                            rationale=decision_data["rationale"]
+                        )
+                        session.add(decision)
+                        
+                        rule = decision_data['rule_triggered']
+                        if decision.action_approved:
+                            await broadcaster.broadcast(f'agent:log:{{"step":"policy_pass","message":"✅ Policy Gate APPROVED. Rule: {rule}. Executing recovery...","icon":"✅","event_id":{event_id}}}')
+                            await asyncio.sleep(0.3)
+                            
+                            action = await execute_recovery(session, event, decision.action_proposed)
+                            if action.outcome == RecoveryOutcome.success:
+                                event.status = EventStatus.recovered
+                                await broadcaster.broadcast(f'agent:log:{{"step":"recovered","message":"💰 Recovery SUCCESS for event #{event_id}! ₹{float(event.amount):,.2f} recovered.","icon":"💰","event_id":{event_id}}}')
+                            else:
+                                event.status = EventStatus.unrecovered
+                                await broadcaster.broadcast(f'agent:log:{{"step":"failed","message":"Recovery attempt failed for event #{event_id}. Marked as unrecovered.","icon":"❌","event_id":{event_id}}}')
+                        else:
+                            rationale_short = decision_data['rationale'][:80]
+                            await broadcaster.broadcast(f'agent:log:{{"step":"policy_block","message":"🚫 Policy Gate BLOCKED action. Rule: {rule}. Escalating instead.","icon":"🚫","event_id":{event_id}}}')
+                            await asyncio.sleep(0.3)
+                            
+                            action = await execute_recovery(session, event, "Escalate")
+                            event.status = EventStatus.escalated
+                            await broadcaster.broadcast(f'agent:log:{{"step":"escalated","message":"Event #{event_id} escalated for human review.","icon":"👤","event_id":{event_id}}}')
+                        
+                        await session.commit()
+                        await broadcaster.broadcast(f"processed:{event_id}")
+                        await asyncio.sleep(0.5)  # Pacing between events
+                        
+                    except Exception as e:
+                        logger.error(f"Agent policy/execute error for event {event_id}: {e}")
+                        await session.rollback()
+                        try:
+                            event = await session.get(RevenueEvent, event_id)
+                            if event:
+                                event.status = EventStatus.open
+                                await session.commit()
+                        except Exception:
+                            pass
+            
+            # Brief pause between sweep cycles
+            await broadcaster.broadcast('agent:log:{"step":"cycle_done","message":"Sweep cycle complete. Pausing before next sweep...","icon":"⏱️"}')
+            for _ in range(4):
+                if not _agent_active:
+                    break
+                await asyncio.sleep(1)
+                
+        except Exception as e:
+            logger.error(f"Agent loop error: {e}")
+            await asyncio.sleep(2)
+    
+    await broadcaster.broadcast('agent:log:{"step":"deactivated","message":"Agent deactivated. Autonomous processing stopped.","icon":"⏹️"}')
+    logger.info("🤖 Agent DEACTIVATED")
+
+@router.post("/agent/start")
+async def start_agent():
+    """Activates the autonomous agent loop."""
+    global _agent_task, _agent_active
+    if _agent_active:
+        return {"status": "already_running"}
+    _agent_active = True
+    _agent_task = asyncio.create_task(_agent_loop())
+    return {"status": "started"}
+
+@router.post("/agent/stop")
+async def stop_agent():
+    """Deactivates the autonomous agent loop."""
+    global _agent_task, _agent_active
+    _agent_active = False
+    if _agent_task and not _agent_task.done():
+        # Give the loop a moment to finish its current iteration
+        await asyncio.sleep(0.5)
+    _agent_task = None
+    return {"status": "stopped"}
+
+@router.get("/agent/status")
+async def agent_status():
+    """Returns the current agent status."""
+    return {"active": _agent_active}
+
 @router.post("/trigger-retry-storm")
 async def trigger_retry_storm(db: AsyncSession = Depends(get_db)):
     """Deterministically simulates a retry storm scenario."""
@@ -369,6 +569,72 @@ async def copilot_query(req: CopilotRequest, db: AsyncSession = Depends(get_db))
     
     answer = await ask_copilot(req.query, metrics)
     return {"answer": answer}
+
+@router.get("/dashboard-data")
+async def get_dashboard_data(db: AsyncSession = Depends(get_db)):
+    """JSON API equivalent of the Jinja2 /audit dashboard for the Next.js frontend."""
+    from sqlalchemy import func
+    
+    # Calculate Metrics
+    metrics_stmt = select(
+        func.sum(RevenueEvent.amount).label('total_at_risk'),
+        func.sum(RevenueEvent.amount).filter(RevenueEvent.status == EventStatus.recovered).label('total_recovered')
+    )
+    metrics_result = await db.execute(metrics_stmt)
+    metrics_row = metrics_result.fetchone()
+    
+    total_at_risk = float(metrics_row.total_at_risk or 0)
+    total_recovered = float(metrics_row.total_recovered or 0)
+    recovery_rate = (total_recovered / total_at_risk * 100) if total_at_risk > 0 else 0
+
+    # Fetch recent events
+    stmt = select(RevenueEvent).options(
+        selectinload(RevenueEvent.diagnosis),
+        selectinload(RevenueEvent.policy_decisions),
+        selectinload(RevenueEvent.recovery_actions)
+    ).order_by(RevenueEvent.detected_at.desc()).limit(100)
+    
+    result = await db.execute(stmt)
+    events = result.scalars().all()
+    
+    events_json = []
+    for event in events:
+        events_json.append({
+            "id": event.id,
+            "type": event.type.name,
+            "amount": float(event.amount),
+            "status": event.status.name,
+            "decline_code": event.context.get("decline_code", "N/A"),
+            "detected_at": event.detected_at.isoformat(),
+            "user_id": event.user_id,
+            "diagnosis": {
+                "root_cause": event.diagnosis.root_cause,
+                "recommended_action": event.diagnosis.recommended_action,
+                "confidence": float(event.diagnosis.confidence),
+                "rationale": event.diagnosis.rationale,
+                "model_used": event.diagnosis.model_used
+            } if event.diagnosis else None,
+            "policy": {
+                "action_approved": event.policy_decisions[0].action_approved,
+                "rule_triggered": event.policy_decisions[0].rule_triggered,
+                "rationale": event.policy_decisions[0].rationale
+            } if event.policy_decisions else None,
+            "actions": [{
+                "type": a.action_type.name,
+                "outcome": a.outcome.name,
+                "generated_message": a.context.get("generated_message", ""),
+                "channel": a.context.get("channel", "")
+            } for a in event.recovery_actions]
+        })
+
+    return {
+        "metrics": {
+            "total_at_risk": total_at_risk,
+            "total_recovered": total_recovered,
+            "recovery_rate": recovery_rate
+        },
+        "events": events_json
+    }
 
 @router.get("/stream")
 async def sse_stream(request: Request):
