@@ -1,0 +1,20 @@
+version: '3.8'
+
+# Note: This docker-compose is primarily for Local Development.
+# For production, deploy the Dockerfile to your platform (Render, AWS, etc.) 
+# and use a managed database like Supabase.
+
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: recovery_agent
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
