@@ -39,7 +39,7 @@ export default function Example() {
           </div>
         </div>
         <h2 className="mt-4 text-center text-xl font-semibold text-gray-900 dark:text-gray-50">
-          Sign in to Overview
+          Sign in to RevGuard
         </h2>
         <div className="mt-10">
           <Button asChild className="mt-4 w-full">

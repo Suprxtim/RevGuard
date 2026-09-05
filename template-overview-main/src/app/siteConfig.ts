@@ -1,5 +1,5 @@
 export const siteConfig = {
-  name: "Overview",
+  name: "RevGuard",
   url: "https://overview.tremor.so",
   description: "The only reporting and audit dashboard you will ever need.",
   baseLinks: {

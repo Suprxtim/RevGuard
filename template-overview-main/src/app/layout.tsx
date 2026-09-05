@@ -5,7 +5,7 @@ import { Toaster } from "sonner"
 import "./globals.css"
 
 export const metadata: Metadata = {
-  title: "Overview",
+  title: "RevGuard",
   description: "Dashboard pages to summarize data.",
 }
 

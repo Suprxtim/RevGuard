@@ -20,7 +20,7 @@ export default function SupportPage() {
   
   const fetchDashboardData = async () => {
     try {
-      const res = await fetch("http://127.0.0.1:8000/admin/dashboard-data")
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'}/admin/dashboard-data`)
       if (res.ok) {
         setData(await res.json())
       }

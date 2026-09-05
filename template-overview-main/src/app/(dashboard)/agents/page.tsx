@@ -30,7 +30,7 @@ export default function AgentsPage() {
     setIsLoading(true)
 
     try {
-      const res = await fetch("http://127.0.0.1:8000/admin/copilot", {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'}/admin/copilot`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: userMessage.content })

@@ -42,11 +42,11 @@ export default function DashboardPage() {
   const [agentActive, setAgentActive] = useState(false)
   const [agentLogs, setAgentLogs] = useState<AgentLogEntry[]>([])
   const [agentToggling, setAgentToggling] = useState(false)
-  const logEndRef = useRef<HTMLDivElement>(null)
+  const logContainerRef = useRef<HTMLDivElement>(null)
   
   const fetchDashboardData = async () => {
     try {
-      const res = await fetch("http://127.0.0.1:8000/admin/dashboard-data")
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'}/admin/dashboard-data`)
       if (res.ok) {
         setData(await res.json())
       }
@@ -57,7 +57,7 @@ export default function DashboardPage() {
 
   // Check initial agent status
   useEffect(() => {
-    fetch("http://127.0.0.1:8000/admin/agent/status")
+    fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'}/admin/agent/status`)
       .then(r => r.json())
       .then(d => setAgentActive(d.active))
       .catch(() => {})
@@ -67,7 +67,7 @@ export default function DashboardPage() {
     fetchDashboardData()
 
     // Listen to SSE
-    const eventSource = new EventSource("http://127.0.0.1:8000/admin/stream")
+    const eventSource = new EventSource(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'}/admin/stream`)
     eventSource.onmessage = (e) => {
       if (e.data.startsWith("agent:log:")) {
         try {
@@ -84,14 +84,19 @@ export default function DashboardPage() {
 
   // Auto-scroll agent log
   useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: "smooth" })
+    if (logContainerRef.current) {
+      logContainerRef.current.scrollTo({
+        top: logContainerRef.current.scrollHeight,
+        behavior: "smooth"
+      })
+    }
   }, [agentLogs])
 
   const handleAgentToggle = async (checked: boolean) => {
     setAgentToggling(true)
     try {
       const endpoint = checked ? "/admin/agent/start" : "/admin/agent/stop"
-      const res = await fetch(`http://127.0.0.1:8000${endpoint}`, { method: "POST" })
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'}${endpoint}`, { method: "POST" })
       if (res.ok) {
         setAgentActive(checked)
         if (checked) {
@@ -110,7 +115,7 @@ export default function DashboardPage() {
 
   const handleAction = async (endpoint: string) => {
     try {
-      const res = await fetch(`http://127.0.0.1:8000${endpoint}`, { method: "POST" })
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'}${endpoint}`, { method: "POST" })
       if (res.ok) {
         if (endpoint.includes("simulate")) {
           toast.success("Batch simulation started")
@@ -247,7 +252,7 @@ export default function DashboardPage() {
                 </button>
               </div>
               <Card className="p-0 overflow-hidden">
-                <div className="max-h-64 overflow-y-auto bg-gray-950 dark:bg-black font-mono text-xs">
+                <div ref={logContainerRef} className="max-h-64 overflow-y-auto bg-gray-950 dark:bg-black font-mono text-xs">
                   <div className="p-3 space-y-0.5">
                     {agentLogs.map((log, idx) => (
                       <div key={idx} className={`flex items-start gap-2 py-0.5 px-1 rounded ${getStepBg(log.step)}`}>
@@ -258,7 +263,6 @@ export default function DashboardPage() {
                         <span className={getStepColor(log.step)}>{log.message}</span>
                       </div>
                     ))}
-                    <div ref={logEndRef} />
                   </div>
                 </div>
               </Card>
